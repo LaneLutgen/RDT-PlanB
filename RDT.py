@@ -1,6 +1,7 @@
 import Network
 import argparse
 from time import sleep
+import time
 import hashlib
 
 
@@ -111,7 +112,7 @@ class Packet_2:
 
 class RDT:
     ## latest sequence number used in a packet
-    seq_num = 1
+    seq_num = 0
     ## buffer of bytes read from network
     byte_buffer = '' 
 
@@ -210,11 +211,84 @@ class RDT:
                 self.rdt_2_1_send(self.prior_message)
                 break
     
+    timeout = 0.5 #1 second timeout
+    time_last_send = None
+    checkTime = False
+    
     def rdt_3_0_send(self, msg_S):
-        pass
+        #Save the old message for re-transmission
+        self.prior_message = msg_S
+        #print('Calling RDT 3.0 Send')
+        #print('MESSEGE: '+msg_S)
+        p = Packet_2(self.seq_num, msg_S, 2)  
+        
+        #Set the time of the send      
+        self.checkTime = True
+        self.network.udt_send(p.get_byte_S())
+        self.time_last_send = time.time()
+        
+        if self.seq_num == 0:
+            self.seq_num = 1
+        else:
+            self.seq_num = 0
+      
+    def rdt_3_0_send_response(self, response):
+        p = None
+        if response == 1:
+            p = Packet_2(self.seq_num, 'ACK', response)
+        else:
+            p = Packet_2(self.seq_num, 'NAK', response)
+            
+        self.checkTime = False    
+        self.network.udt_send(p.get_byte_S())    
         
     def rdt_3_0_receive(self):
-        pass
+        current_time = time.time()
+        ret_S = None
+        byte_S = self.network.udt_receive()
+        self.byte_buffer += byte_S
+        
+        while True:
+            
+            #If timeout occured, resend message
+            if(self.time_last_send != None and self.checkTime):
+                if current_time - self.time_last_send > self.timeout:
+                    #print('Timeout occured')
+                    self.rdt_3_0_send(self.prior_message)
+            
+            if(len(self.byte_buffer) < Packet.length_S_length):
+                return ret_S
+            
+            length = int(self.byte_buffer[:Packet.length_S_length])+1
+            if len(self.byte_buffer) < length:
+                return ret_S
+            
+            try:
+                p = Packet_2.from_byte_S(self.byte_buffer[0:length])
+                #print('Sequence Num')
+                #print(self.seq_num)
+            except RuntimeError:
+                #print('Packet is corrupt')
+                self.byte_buffer = self.byte_buffer[length:]
+                #self.rdt_3_0_send_response(0)#NAK
+                break
+            
+            #Check packet type
+            if p.ack == 2: #Data packet and not corrupt, send ACK
+                #print('Received data packet')
+                self.old_seq_num = p.seq_num
+                ret_S = p.msg_S if (ret_S is None) else ret_S + p.msg_S
+                self.byte_buffer = self.byte_buffer[length:]
+                #print('Sending ACK')
+                self.rdt_3_0_send_response(1)#ACK
+            elif p.ack == 1 and p.seq_num == self.seq_num:#ACK packet
+                #print('Received ACK packet')
+                self.byte_buffer = self.byte_buffer[length:]
+                self.checkTime = False
+                break
+            else:
+                self.byte_buffer = self.byte_buffer[length:]
+                break
         
 
 if __name__ == '__main__':

@@ -47,3 +47,4 @@ Temporary Items
 .apdisk
 *.project
 .pydevproject
+*.pyc
